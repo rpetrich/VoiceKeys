@@ -375,6 +375,11 @@ static BOOL AudioInputTeardownDevice()
 // SpeechClient
 //
 
+static BOOL VKCapitalizeFirstWord;
+static BOOL VKFinishWithPeriod;
+static BOOL VKFinishWithSpace;
+static BOOL VKFinishWithReturn;
+
 __attribute__((visibility("hidden")))
 @interface ProductTokenAppend(SpeechClient) : NSObject {
 @private
@@ -387,6 +392,11 @@ __attribute__((visibility("hidden")))
 }
 + (id)activeInstance;
 - (void)addInputString:(NSString *)inputString;
+@end
+
+@interface UIKeyboardLayout : UIView {
+}
+- (BOOL)performReturnAction;
 @end
 
 @implementation ProductTokenAppend(SpeechClient)
@@ -453,10 +463,26 @@ static inline void ShowNoRecognitionAlert()
 			ShowNoRecognitionAlert();
 		else {
 			NSString *utterance = [[hypotheses objectAtIndex:0] objectForKey:@"utterance"];
-			if (!utterance)
+			if ([utterance length] == 0)
 				ShowNoRecognitionAlert();
-			else
-				[[objc_getClass("UIKeyboardImpl") activeInstance] addInputString:utterance];
+			else {
+				if (VKCapitalizeFirstWord) {
+					utterance = [utterance stringByReplacingCharactersInRange:NSMakeRange(0, 1) withString:[[utterance substringToIndex:1] uppercaseString]];
+				}
+				if (VKFinishWithPeriod) {
+					utterance = [utterance stringByAppendingString:@"."];
+				}
+				if (VKFinishWithSpace) {
+					utterance = [utterance stringByAppendingString:@" "];
+				}
+				UIKeyboardImpl *kbi = [objc_getClass("UIKeyboardImpl") activeInstance];
+				[kbi addInputString:utterance];
+				if (VKFinishWithReturn) {
+					UIKeyboardLayout **kbl = CHIvarRef(kbi, m_layout, UIKeyboardLayout *);
+					if (kbl)
+						[*kbl performReturnAction];
+				}
+			}
 		}
 	}
 	[responseData setLength:0];
@@ -549,6 +575,17 @@ static void DidEnterBackground(CFNotificationCenterRef center, void *observer, C
 	}
 }
 
+static void LoadSettings()
+{
+	CHAutoreleasePoolForScope();
+	NSDictionary *dict = [[NSDictionary alloc] initWithContentsOfFile:@"/var/mobile/Library/Preferences/com.rpetrich.voicekeys.plist"];
+	VKCapitalizeFirstWord = [[dict objectForKey:@"VKCapitalizeFirstWord"] boolValue];
+	VKFinishWithPeriod = [[dict objectForKey:@"VKFinishWithPeriod"] boolValue];
+	VKFinishWithSpace = [[dict objectForKey:@"VKFinishWithSpace"] boolValue];
+	VKFinishWithReturn = [[dict objectForKey:@"VKFinishWithReturn"] boolValue];
+	[dict release];
+}
+
 //
 // Constructor
 //
@@ -560,4 +597,6 @@ CHConstructor {
 	CFNotificationCenterAddObserver(center, NULL, ProximityStateDidChange, (CFStringRef)UIDeviceProximityStateDidChangeNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
 	CFNotificationCenterAddObserver(center, NULL, WillEnterForeground, CFSTR("UIApplicationWillEnterForegroundNotification"), NULL, CFNotificationSuspensionBehaviorCoalesce);
 	CFNotificationCenterAddObserver(center, NULL, DidEnterBackground, CFSTR("UIApplicationDidEnterBackgroundNotification"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+	CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (void *)LoadSettings, CFSTR("com.rpetrich.voicekeys.settingschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+	LoadSettings();
 }
