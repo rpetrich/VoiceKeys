@@ -503,6 +503,8 @@ static void KeyboardWillHide(CFNotificationCenterRef center, void *observer, CFS
 		[UIDevice currentDevice].proximityMonitoringEnabled = NO;
 }
 
+static CFAbsoluteTime startTime;
+
 static void ProximityStateDidChange(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
 {
 	ProductLog(@"Proximity state did change");
@@ -510,12 +512,17 @@ static void ProximityStateDidChange(CFNotificationCenterRef center, void *observ
 		AudioInputInitialize();
 		audioInputData.frameCallback = audioInputFrameCallback;
 		speechData = CFDataCreateMutable(kCFAllocatorDefault, 0);
+		startTime = CFAbsoluteTimeGetCurrent();
 		AudioInputSetupDevice();
 	} else {
 		AudioInputTeardownDevice();
 		if (audioInputData.hasSpeech) {
-			ProductLog(@"Sending speech to Google");
-			[[[ProductTokenAppend(SpeechClient) alloc] initWithSpeechData:(NSData *)speechData] release];
+			if (CFAbsoluteTimeGetCurrent() < startTime + 2.0)
+				ProductLog(@"Speech was too short");
+			else {
+				ProductLog(@"Sending speech to Google");
+				[[[ProductTokenAppend(SpeechClient) alloc] initWithSpeechData:(NSData *)speechData] release];
+			}
 		} else {
 			ProductLog(@"No speech detected");
 		}
