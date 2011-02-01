@@ -399,6 +399,7 @@ __attribute__((visibility("hidden")))
 		[request setHTTPMethod:@"POST"];
 		[request setHTTPBody:speechData];
 		[request setValue:@"audio/x-speex-with-header-byte; rate=16000" forHTTPHeaderField:@"Content-Type"];
+		[request setTimeoutInterval:15.0];
 		connection = [[NSURLConnection connectionWithRequest:request delegate:self] retain];
 		[self retain];
 	}
@@ -464,6 +465,7 @@ static inline void ShowNoRecognitionAlert()
 
 - (void)connection:(NSURLConnection *)connection didFailWithError:(NSError *)error
 {
+	ShowNoRecognitionAlert();
 	[responseData setLength:0];
 	[self release];
 }
