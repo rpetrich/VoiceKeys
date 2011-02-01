@@ -1,0 +1,9 @@
+Package: com.rpetrich.voicekeys
+Priority: optional
+Section: Tweaks
+Architecture: iphoneos-arm
+Version: 0.1
+Description: Dictate text via Google's speech recognition
+Name: VoiceKeys
+Depends: firmware (>= 3.1), mobilesubstrate, preferenceloader (>= 2.0), libspeex
+Author: Ryan Petrich <rpetrich+hearken@gmail.com>
