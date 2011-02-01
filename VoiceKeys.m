@@ -21,7 +21,7 @@
 #define PASSTHRU(v) v
 #define APPEND(a,b) a ## b
      
-#define ProductTokenAppend(value) Hearken ## value
+#define ProductTokenAppend(value) VoiceKeys ## value
 #define ProductLog(args...) NSLog(@XSTR(ProductTokenAppend()) ": " args)
 
 //
