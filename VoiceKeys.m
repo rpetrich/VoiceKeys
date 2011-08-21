@@ -476,7 +476,22 @@ static inline void ShowNoRecognitionAlert()
 					utterance = [utterance stringByAppendingString:@" "];
 				}
 				UIKeyboardImpl *kbi = [objc_getClass("UIKeyboardImpl") activeInstance];
-				[kbi addInputString:utterance];
+				switch ([utterance length]) {
+					case 0:
+						break;
+					case 1:
+						[kbi addInputString:utterance];
+						break;
+					default:
+						[kbi addInputString:[utterance substringToIndex:1]];
+						[kbi addInputString:[utterance substringFromIndex:1]];
+						break;
+				}
+				UIKeyboardCandidate **candidate = CHIvarRef(kbi, m_autocorrection, UIKeyboardCandidate *);
+				if (candidate) {
+					[*candidate release];
+					*candidate = nil;
+				}
 				if (VKFinishWithReturn) {
 					UIKeyboardLayout **kbl = CHIvarRef(kbi, m_layout, UIKeyboardLayout *);
 					if (kbl)
@@ -595,8 +610,8 @@ CHConstructor {
 	CFNotificationCenterAddObserver(center, NULL, KeyboardWillShow, (CFStringRef)UIKeyboardWillShowNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
 	CFNotificationCenterAddObserver(center, NULL, KeyboardWillHide, (CFStringRef)UIKeyboardWillHideNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
 	CFNotificationCenterAddObserver(center, NULL, ProximityStateDidChange, (CFStringRef)UIDeviceProximityStateDidChangeNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
-	CFNotificationCenterAddObserver(center, NULL, WillEnterForeground, CFSTR("UIApplicationWillEnterForegroundNotification"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-	CFNotificationCenterAddObserver(center, NULL, DidEnterBackground, CFSTR("UIApplicationDidEnterBackgroundNotification"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+	CFNotificationCenterAddObserver(center, NULL, WillEnterForeground, (CFStringRef)UIApplicationWillEnterForegroundNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
+	CFNotificationCenterAddObserver(center, NULL, DidEnterBackground, (CFStringRef)UIApplicationDidEnterBackgroundNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
 	CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (void *)LoadSettings, CFSTR("com.rpetrich.voicekeys.settingschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
 	LoadSettings();
 }
