@@ -4,6 +4,7 @@
 #import <AudioUnit/AUComponent.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <JSON/JSON.h>
+#import <ActionMenu/ActionMenu.h>
 
 #include <speex/speex.h>
 #include <speex/speex_echo.h>
@@ -513,13 +514,10 @@ static inline void ShowNoRecognitionAlert()
 
 @end
 
-//
-// Notification Callbacks
-//
-
 static BOOL weOwnProximitySensor;
 static BOOL hasKeyboard;
 static CFMutableDataRef speechData;
+static CFAbsoluteTime startTime;
 
 static void audioInputFrameCallback(char *buffer, size_t length)
 {
@@ -528,9 +526,124 @@ static void audioInputFrameCallback(char *buffer, size_t length)
 	CFDataAppendBytes(speechData, (const UInt8 *)buffer, length);
 }
 
+static inline BOOL StartRecognition()
+{
+	if (!speechData) {
+		AudioInputInitialize();
+		audioInputData.frameCallback = audioInputFrameCallback;
+		speechData = CFDataCreateMutable(kCFAllocatorDefault, 0);
+		startTime = CFAbsoluteTimeGetCurrent();
+		AudioInputSetupDevice();
+		return YES;
+	}
+	return NO;
+}
+
+static inline BOOL StopRecognitionAndSend(BOOL shouldSend)
+{
+	BOOL result = NO;
+	if (speechData) {
+		AudioInputTeardownDevice();
+		if (audioInputData.hasSpeech) {
+			if (CFAbsoluteTimeGetCurrent() < startTime + 2.0)
+				ProductLog(@"Speech was too short");
+			else {
+				ProductLog(@"Sending speech to Google");
+				if (shouldSend) {
+					[[[ProductTokenAppend(SpeechClient) alloc] initWithSpeechData:(NSData *)speechData] release];
+					result = YES;
+				}
+			}
+		} else {
+			ProductLog(@"No speech detected");
+		}
+		CFRelease(speechData);
+		speechData = NULL;
+		AudioInputCleanup();
+	}
+	return result;
+}
+
+// Action Menu
+
+__attribute__((visibility("hidden")))
+@interface ProductTokenAppend(ActionMenuHandler) : NSObject <UIAlertViewDelegate> {
+@private
+	UIAlertView *av;
+}
+@end
+
+@implementation ProductTokenAppend(ActionMenuHandler)
+
+- (id)init
+{
+	if ((self = [super init])) {
+		av = [[UIAlertView alloc] initWithTitle:@"VoiceKeys" message:@"Recording speech…" delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Recognize", nil];
+	}
+	return self;
+}
+
+- (void)show
+{
+	if (!av.window || av.hidden) {
+		[self retain];
+		[av show];
+	}
+}
+
+- (void)dealloc
+{
+	av.delegate = nil;
+	[av release];
+	[super dealloc];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
+{
+	if (buttonIndex != av.cancelButtonIndex) {
+		if (!StopRecognitionAndSend(YES)) {
+			alertView = [[UIAlertView alloc] initWithTitle:@"VoiceKeys" message:@"Unable to convert speech to text!" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+			[alertView show];
+			[alertView release];
+		}
+	} else {
+		StopRecognitionAndSend(NO);
+	}
+	[self release];
+}
+
+@end
+
+@implementation UIResponder (VoiceKeys)
+
+- (void)performVoiceKeysAction
+{
+	if (StartRecognition()) {
+		ProductTokenAppend(ActionMenuHandler) *amh = [[ProductTokenAppend(ActionMenuHandler) alloc] init];
+		[amh show];
+		[amh release];
+	}
+}
+
+- (BOOL)canPerformVoiceKeysAction
+{
+	return hasKeyboard && !speechData;
+}
+
+@end
+
+//
+// Notification Callbacks
+//
+
 static void KeyboardWillShow(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
 {
 	ProductLog(@"Entering text field");
+	static BOOL hasRegisteredWithActionMenu;
+	if (!hasRegisteredWithActionMenu) {
+		[[UIMenuController sharedMenuController] registerAction:@selector(performVoiceKeysAction) title:@"VoiceKeys" canPerform:@selector(canPerformVoiceKeysAction) forPlugin:@"VoiceKeys"];
+		hasRegisteredWithActionMenu = YES;
+	}
 	UIDevice *device = [UIDevice currentDevice];
 	weOwnProximitySensor = !device.proximityMonitoringEnabled;
 	if (weOwnProximitySensor)
@@ -546,32 +659,13 @@ static void KeyboardWillHide(CFNotificationCenterRef center, void *observer, CFS
 		[UIDevice currentDevice].proximityMonitoringEnabled = NO;
 }
 
-static CFAbsoluteTime startTime;
-
 static void ProximityStateDidChange(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
 {
 	ProductLog(@"Proximity state did change");
-	if ([UIDevice currentDevice].proximityState) {
-		AudioInputInitialize();
-		audioInputData.frameCallback = audioInputFrameCallback;
-		speechData = CFDataCreateMutable(kCFAllocatorDefault, 0);
-		startTime = CFAbsoluteTimeGetCurrent();
-		AudioInputSetupDevice();
-	} else {
-		AudioInputTeardownDevice();
-		if (audioInputData.hasSpeech) {
-			if (CFAbsoluteTimeGetCurrent() < startTime + 2.0)
-				ProductLog(@"Speech was too short");
-			else {
-				ProductLog(@"Sending speech to Google");
-				[[[ProductTokenAppend(SpeechClient) alloc] initWithSpeechData:(NSData *)speechData] release];
-			}
-		} else {
-			ProductLog(@"No speech detected");
-		}
-		CFRelease(speechData);
-		AudioInputCleanup();
-	}
+	if ([UIDevice currentDevice].proximityState)
+		StartRecognition();
+	else
+		StopRecognitionAndSend(YES);
 }
 
 static void WillEnterForeground(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
@@ -606,6 +700,7 @@ static void LoadSettings()
 //
 
 CHConstructor {
+	CHAutoreleasePoolForScope();
 	CFNotificationCenterRef center = CFNotificationCenterGetLocalCenter();
 	CFNotificationCenterAddObserver(center, NULL, KeyboardWillShow, (CFStringRef)UIKeyboardWillShowNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
 	CFNotificationCenterAddObserver(center, NULL, KeyboardWillHide, (CFStringRef)UIKeyboardWillHideNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
