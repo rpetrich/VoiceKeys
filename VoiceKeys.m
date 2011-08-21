@@ -674,6 +674,7 @@ static void WillEnterForeground(CFNotificationCenterRef center, void *observer, 
 	if (hasKeyboard && weOwnProximitySensor) {
 		[UIDevice currentDevice].proximityMonitoringEnabled = YES;
 	}
+	StopRecognitionAndSend(NO);
 }
 
 static void DidEnterBackground(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
@@ -682,6 +683,7 @@ static void DidEnterBackground(CFNotificationCenterRef center, void *observer, C
 	if (hasKeyboard && weOwnProximitySensor) {
 		[UIDevice currentDevice].proximityMonitoringEnabled = NO;
 	}
+	StopRecognitionAndSend(NO);
 }
 
 static void LoadSettings()
