@@ -5,6 +5,8 @@ VoiceKeys_PRIVATE_FRAMEWORKS = JSON
 VoiceKeys_LDFLAGS = -lspeex
 
 ADDITIONAL_CFLAGS = -std=c99
+OPTFLAG = -Os
+TARGET_IPHONEOS_DEPLOYMENT_VERSION = 4.0
 
 include framework/makefiles/common.mk
 include framework/makefiles/tweak.mk

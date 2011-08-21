@@ -487,7 +487,7 @@ static inline void ShowNoRecognitionAlert()
 						[kbi addInputString:[utterance substringFromIndex:1]];
 						break;
 				}
-				UIKeyboardCandidate **candidate = CHIvarRef(kbi, m_autocorrection, UIKeyboardCandidate *);
+				id *candidate = CHIvarRef(kbi, m_autocorrection, id);
 				if (candidate) {
 					[*candidate release];
 					*candidate = nil;
