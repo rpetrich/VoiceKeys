@@ -23,7 +23,11 @@
 #define APPEND(a,b) a ## b
      
 #define ProductTokenAppend(value) VoiceKeys ## value
+#ifdef DEBUG
 #define ProductLog(args...) NSLog(@XSTR(ProductTokenAppend()) ": " args)
+#else
+#define ProductLog(args...) do { } while(0)
+#endif
 
 //
 // AudioInput
