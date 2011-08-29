@@ -3,7 +3,7 @@ Priority: optional
 Section: Tweaks
 Maintainer: BigBoss <bigboss@thebigboss.org>
 Architecture: iphoneos-arm
-Version: 1.0
+Version: 1.0.1
 Description: Dictate text via Google's speech recognition
 Name: VoiceKeys
 Depends: firmware (>= 4.0), mobilesubstrate, preferenceloader (>= 2.0), libspeex, actionmenu (>= 1.2.3)
