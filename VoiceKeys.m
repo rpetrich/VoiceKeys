@@ -413,6 +413,7 @@ static CFMutableDataRef speechData;
 static CFAbsoluteTime startTime;
 static CPDistributedMessagingCenter *messagingCenter;
 static NSString *lastResult;
+static BOOL waitingForRecognition;
 
 @implementation ProductTokenAppend(SpeechClient)
 
@@ -502,6 +503,7 @@ static void audioInputFrameCallback(char *buffer, size_t length)
 
 static inline BOOL StartRecognition()
 {
+	waitingForRecognition = YES;
 	if (messagingCenter) {
 		NSDictionary *results = [messagingCenter sendMessageAndReceiveReplyName:@"start" userInfo:nil];
 		return [[results objectForKey:@"actionSucceeded"] boolValue];
@@ -529,6 +531,9 @@ static inline NSString *GetLastResult()
 
 static void RecognitionDidComplete(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
 {
+	if (!waitingForRecognition)
+		return;
+	waitingForRecognition = NO;
 	NSString *utterance = GetLastResult();
 	if ([utterance length] == 0)
 		ShowNoRecognitionAlert();
@@ -572,12 +577,7 @@ static inline BOOL StopRecognitionAndSend(BOOL shouldSend)
 	if (messagingCenter) {
 		NSDictionary *userInfo = [NSDictionary dictionaryWithObject:shouldSend ? (id)kCFBooleanTrue : (id)kCFBooleanFalse forKey:@"send"];
 		NSDictionary *results = [messagingCenter sendMessageAndReceiveReplyName:@"stop" userInfo:userInfo];
-		CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), (void *)RecognitionDidComplete, (void *)RecognitionDidComplete, CFSTR("com.rpetrich.voicekeys.finished"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-		BOOL result = [[results objectForKey:@"actionSucceeded"] boolValue];
-		if (!result) {
-			CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), (void *)RecognitionDidComplete, CFSTR("com.rpetrich.voicekeys.finished"), NULL);
-		}
-		return result;
+		return [[results objectForKey:@"actionSucceeded"] boolValue];
 	}
 	BOOL result = NO;
 	if (speechData) {
@@ -588,7 +588,6 @@ static inline BOOL StopRecognitionAndSend(BOOL shouldSend)
 			else {
 				ProductLog(@"Sending speech to Google");
 				if (shouldSend) {
-					CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), (void *)RecognitionDidComplete, (void *)RecognitionDidComplete, CFSTR("com.rpetrich.voicekeys.settingschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
 					[[[ProductTokenAppend(SpeechClient) alloc] initWithSpeechData:(NSData *)speechData] release];
 					result = YES;
 				}
@@ -778,7 +777,9 @@ CHConstructor {
 	CFNotificationCenterAddObserver(center, NULL, ProximityStateDidChange, (CFStringRef)UIDeviceProximityStateDidChangeNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
 	CFNotificationCenterAddObserver(center, NULL, WillEnterForeground, (CFStringRef)UIApplicationWillEnterForegroundNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
 	CFNotificationCenterAddObserver(center, NULL, DidEnterBackground, (CFStringRef)UIApplicationDidEnterBackgroundNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
-	CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (void *)LoadSettings, CFSTR("com.rpetrich.voicekeys.settingschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+	CFNotificationCenterRef darwin = CFNotificationCenterGetDarwinNotifyCenter();
+	CFNotificationCenterAddObserver(darwin, NULL, (void *)LoadSettings, CFSTR("com.rpetrich.voicekeys.settingschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+	CFNotificationCenterAddObserver(darwin, NULL, (void *)RecognitionDidComplete, CFSTR("com.rpetrich.voicekeys.finished"), NULL, CFNotificationSuspensionBehaviorCoalesce);
 	LoadSettings();
 	messagingCenter = [[CPDistributedMessagingCenter centerNamed:@"com.rpetrich.voicekeys.springboard"] retain];
 	if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
