@@ -4,6 +4,7 @@
 #import <AudioUnit/AUComponent.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <JSON/JSON.h>
+#import <AppSupport/AppSupport.h>
 #import <ActionMenu/ActionMenu.h>
 
 #include <speex/speex.h>
@@ -11,6 +12,8 @@
 #include <speex/speex_resampler.h>
 #include <speex/speex_jitter.h>
 #include <speex/speex_types.h>
+
+#include <notify.h>
 
 #define AUDIO_INPUT_MIC_FREQUENCY          16000
 #define AUDIO_INPUT_BITRATE                48000
@@ -404,6 +407,13 @@ __attribute__((visibility("hidden")))
 - (BOOL)performReturnAction;
 @end
 
+static BOOL weOwnProximitySensor;
+static BOOL hasKeyboard;
+static CFMutableDataRef speechData;
+static CFAbsoluteTime startTime;
+static CPDistributedMessagingCenter *messagingCenter;
+static NSString *lastResult;
+
 @implementation ProductTokenAppend(SpeechClient)
 
 - (id)initWithSpeechData:(NSData *)speechData
@@ -460,50 +470,13 @@ static inline void ShowNoRecognitionAlert()
 - (void)connectionDidFinishLoading:(NSURLConnection *)connection
 {
 	NSDictionary *responseDict = [JSON objectWithData:responseData options:0 error:NULL];
-	if (!responseDict)
-		ShowNoRecognitionAlert();
-	else {
+	[lastResult release];
+	if (responseDict) {
 		NSArray *hypotheses = [responseDict objectForKey:@"hypotheses"];
-		if (!hypotheses)
-			ShowNoRecognitionAlert();
-		else {
-			NSString *utterance = [[hypotheses objectAtIndex:0] objectForKey:@"utterance"];
-			if ([utterance length] == 0)
-				ShowNoRecognitionAlert();
-			else {
-				if (VKCapitalizeFirstWord) {
-					utterance = [utterance stringByReplacingCharactersInRange:NSMakeRange(0, 1) withString:[[utterance substringToIndex:1] uppercaseString]];
-				}
-				if (VKFinishWithPeriod) {
-					utterance = [utterance stringByAppendingString:@"."];
-				}
-				if (VKFinishWithSpace) {
-					utterance = [utterance stringByAppendingString:@" "];
-				}
-				UIKeyboardImpl *kbi = [objc_getClass("UIKeyboardImpl") activeInstance];
-				switch ([utterance length]) {
-					case 0:
-						break;
-					case 1:
-						[kbi addInputString:utterance];
-						break;
-					default:
-						[kbi addInputString:[utterance substringToIndex:1]];
-						[kbi addInputString:[utterance substringFromIndex:1]];
-						break;
-				}
-				id *candidate = CHIvarRef(kbi, m_autocorrection, id);
-				if (candidate) {
-					[*candidate release];
-					*candidate = nil;
-				}
-				if (VKFinishWithReturn) {
-					UIKeyboardLayout **kbl = CHIvarRef(kbi, m_layout, UIKeyboardLayout *);
-					if (kbl)
-						[*kbl performReturnAction];
-				}
-			}
-		}
+		lastResult = [[[hypotheses objectAtIndex:0] objectForKey:@"utterance"] retain];
+		notify_post("com.rpetrich.voicekeys.finished");
+	} else {
+		lastResult = nil;
 	}
 	[responseData setLength:0];
 	[self release];
@@ -511,17 +484,14 @@ static inline void ShowNoRecognitionAlert()
 
 - (void)connection:(NSURLConnection *)connection didFailWithError:(NSError *)error
 {
-	ShowNoRecognitionAlert();
+	[lastResult release];
+	lastResult = nil;
+	notify_post("com.rpetrich.voicekeys.finished");
 	[responseData setLength:0];
 	[self release];
 }
 
 @end
-
-static BOOL weOwnProximitySensor;
-static BOOL hasKeyboard;
-static CFMutableDataRef speechData;
-static CFAbsoluteTime startTime;
 
 static void audioInputFrameCallback(char *buffer, size_t length)
 {
@@ -532,6 +502,10 @@ static void audioInputFrameCallback(char *buffer, size_t length)
 
 static inline BOOL StartRecognition()
 {
+	if (messagingCenter) {
+		NSDictionary *results = [messagingCenter sendMessageAndReceiveReplyName:@"start" userInfo:nil];
+		return [[results objectForKey:@"actionSucceeded"] boolValue];
+	}
 	if (!speechData) {
 		AudioInputInitialize();
 		audioInputData.frameCallback = audioInputFrameCallback;
@@ -543,8 +517,68 @@ static inline BOOL StartRecognition()
 	return NO;
 }
 
+static inline NSString *GetLastResult()
+{
+	if (messagingCenter) {
+		NSDictionary *results = [messagingCenter sendMessageAndReceiveReplyName:@"status" userInfo:nil];
+		return [results objectForKey:@"result"];
+	} else {
+		return lastResult;
+	}
+}
+
+static void RecognitionDidComplete(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
+{
+	NSString *utterance = GetLastResult();
+	if ([utterance length] == 0)
+		ShowNoRecognitionAlert();
+	else {
+		if (VKCapitalizeFirstWord) {
+			utterance = [utterance stringByReplacingCharactersInRange:NSMakeRange(0, 1) withString:[[utterance substringToIndex:1] uppercaseString]];
+		}
+		if (VKFinishWithPeriod) {
+			utterance = [utterance stringByAppendingString:@"."];
+		}
+		if (VKFinishWithSpace) {
+			utterance = [utterance stringByAppendingString:@" "];
+		}
+		UIKeyboardImpl *kbi = [objc_getClass("UIKeyboardImpl") activeInstance];
+		switch ([utterance length]) {
+			case 0:
+				break;
+			case 1:
+				[kbi addInputString:utterance];
+				break;
+			default:
+				[kbi addInputString:[utterance substringToIndex:1]];
+				[kbi addInputString:[utterance substringFromIndex:1]];
+				break;
+		}
+		id *candidate = CHIvarRef(kbi, m_autocorrection, id);
+		if (candidate) {
+			[*candidate release];
+			*candidate = nil;
+		}
+		if (VKFinishWithReturn) {
+			UIKeyboardLayout **kbl = CHIvarRef(kbi, m_layout, UIKeyboardLayout *);
+			if (kbl)
+				[*kbl performReturnAction];
+		}
+	}
+}
+
 static inline BOOL StopRecognitionAndSend(BOOL shouldSend)
 {
+	if (messagingCenter) {
+		NSDictionary *userInfo = [NSDictionary dictionaryWithObject:shouldSend ? (id)kCFBooleanTrue : (id)kCFBooleanFalse forKey:@"send"];
+		NSDictionary *results = [messagingCenter sendMessageAndReceiveReplyName:@"stop" userInfo:userInfo];
+		CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), (void *)RecognitionDidComplete, (void *)RecognitionDidComplete, CFSTR("com.rpetrich.voicekeys.finished"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+		BOOL result = [[results objectForKey:@"actionSucceeded"] boolValue];
+		if (!result) {
+			CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), (void *)RecognitionDidComplete, CFSTR("com.rpetrich.voicekeys.finished"), NULL);
+		}
+		return result;
+	}
 	BOOL result = NO;
 	if (speechData) {
 		AudioInputTeardownDevice();
@@ -554,6 +588,7 @@ static inline BOOL StopRecognitionAndSend(BOOL shouldSend)
 			else {
 				ProductLog(@"Sending speech to Google");
 				if (shouldSend) {
+					CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), (void *)RecognitionDidComplete, (void *)RecognitionDidComplete, CFSTR("com.rpetrich.voicekeys.settingschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
 					[[[ProductTokenAppend(SpeechClient) alloc] initWithSpeechData:(NSData *)speechData] release];
 					result = YES;
 				}
@@ -568,6 +603,16 @@ static inline BOOL StopRecognitionAndSend(BOOL shouldSend)
 	return result;
 }
 
+static inline BOOL IsRecognizing()
+{
+	if (messagingCenter) {
+		NSDictionary *results = [messagingCenter sendMessageAndReceiveReplyName:@"status" userInfo:nil];
+		return [[results objectForKey:@"recognizing"] boolValue];
+	} else {
+		return speechData != NULL;
+	}
+}
+
 // Action Menu
 
 __attribute__((visibility("hidden")))
@@ -578,6 +623,23 @@ __attribute__((visibility("hidden")))
 @end
 
 @implementation ProductTokenAppend(ActionMenuHandler)
+
++ (NSDictionary *)handleMessage:(NSString *)name withUserInfo:(NSDictionary *)userInfo
+{
+	BOOL actionSucceeded;
+	if ([name isEqualToString:@"start"]) {
+		actionSucceeded = StartRecognition();
+	} else if ([name isEqualToString:@"stop"]) {
+		actionSucceeded = StopRecognitionAndSend([[userInfo objectForKey:@"send"] boolValue]);
+	} else {
+		actionSucceeded = NO;
+	}
+	return [NSDictionary dictionaryWithObjectsAndKeys:
+		actionSucceeded ? (id)kCFBooleanTrue : (id)kCFBooleanFalse, @"actionSucceeded",
+		speechData ? (id)kCFBooleanTrue : (id)kCFBooleanFalse, @"recognizing",
+		lastResult, @"result",
+		nil];
+}
 
 - (id)init
 {
@@ -631,7 +693,7 @@ __attribute__((visibility("hidden")))
 
 - (BOOL)canPerformVoiceKeysAction
 {
-	return hasKeyboard && !speechData;
+	return hasKeyboard && !IsRecognizing();
 }
 
 @end
@@ -715,4 +777,13 @@ CHConstructor {
 	CFNotificationCenterAddObserver(center, NULL, DidEnterBackground, (CFStringRef)UIApplicationDidEnterBackgroundNotification, NULL, CFNotificationSuspensionBehaviorCoalesce);
 	CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (void *)LoadSettings, CFSTR("com.rpetrich.voicekeys.settingschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
 	LoadSettings();
+	messagingCenter = [[CPDistributedMessagingCenter centerNamed:@"com.rpetrich.voicekeys.springboard"] retain];
+	if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
+		[messagingCenter runServerOnCurrentThread];
+		Class targetClass = [ProductTokenAppend(ActionMenuHandler) class];
+		[messagingCenter registerForMessageName:@"start" target:targetClass selector:@selector(handleMessage:withUserInfo:)];
+		[messagingCenter registerForMessageName:@"stop" target:targetClass selector:@selector(handleMessage:withUserInfo:)];
+		[messagingCenter registerForMessageName:@"status" target:targetClass selector:@selector(handleMessage:withUserInfo:)];
+		messagingCenter = nil;
+	}
 }
