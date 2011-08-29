@@ -707,7 +707,10 @@ static void KeyboardWillShow(CFNotificationCenterRef center, void *observer, CFS
 	ProductLog(@"Entering text field");
 	static BOOL hasRegisteredWithActionMenu;
 	if (!hasRegisteredWithActionMenu) {
-		[[UIMenuController sharedMenuController] registerAction:@selector(performVoiceKeysAction) title:@"VoiceKeys" canPerform:@selector(canPerformVoiceKeysAction) forPlugin:@"VoiceKeys"];
+		id<AMMenuItem> menuItem = [[UIMenuController sharedMenuController] registerAction:@selector(performVoiceKeysAction) title:@"VoiceKeys" canPerform:@selector(canPerformVoiceKeysAction) forPlugin:@"VoiceKeys"];
+		CGFloat scale = [UIScreen instancesRespondToSelector:@selector(scale)] ? [UIScreen mainScreen].scale : 1.0f;
+		menuItem.image = [UIImage imageWithContentsOfFile:(scale > 2.0f) ? @"/Library/ActionMenu/Plugins/VoiceKeys@2x.png" : @"/Library/ActionMenu/Plugins/VoiceKeys.png"];
+		menuItem.priority = kAMMenuItemPrioritySelect - 10;
 		hasRegisteredWithActionMenu = YES;
 	}
 	UIDevice *device = [UIDevice currentDevice];
