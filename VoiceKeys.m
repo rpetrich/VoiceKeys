@@ -14,6 +14,7 @@
 #include <speex/speex_types.h>
 
 #include <notify.h>
+#include <dlfcn.h>
 
 #define AUDIO_INPUT_MIC_FREQUENCY          16000
 #define AUDIO_INPUT_BITRATE                48000
@@ -30,6 +31,12 @@
 #define ProductLog(args...) NSLog(@XSTR(ProductTokenAppend()) ": " args)
 #else
 #define ProductLog(args...) do { } while(0)
+#endif
+
+#ifndef __IPHONE_5_0
+@interface NSJSONSerialization : NSObject
++ (id)JSONObjectWithData:(NSData *)data options:(unsigned)options error:(NSError **)error;
+@end
 #endif
 
 //
@@ -470,7 +477,14 @@ static inline void ShowNoRecognitionAlert()
 
 - (void)connectionDidFinishLoading:(NSURLConnection *)connection
 {
-	NSDictionary *responseDict = [JSON objectWithData:responseData options:0 error:NULL];
+	NSDictionary *responseDict;
+	Class publicJSON = objc_getClass("NSJSONSerialization");
+	if (publicJSON)
+		responseDict = [publicJSON JSONObjectWithData:responseData options:0 error:NULL];
+	else {
+		dlopen("/System/Library/PrivateFrameworks/JSON.framework/JSON", RTLD_LAZY);
+		responseDict = [objc_getClass("JSON") objectWithData:responseData options:0 error:NULL];
+	}
 	[lastResult release];
 	if (responseDict) {
 		NSArray *hypotheses = [responseDict objectForKey:@"hypotheses"];
