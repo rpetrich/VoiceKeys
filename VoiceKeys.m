@@ -394,6 +394,7 @@ static BOOL VKCapitalizeFirstWord;
 static BOOL VKFinishWithPeriod;
 static BOOL VKFinishWithSpace;
 static BOOL VKFinishWithReturn;
+static BOOL VKProximityEnabled;
 
 __attribute__((visibility("hidden")))
 @interface ProductTokenAppend(SpeechClient) : NSObject {
@@ -728,7 +729,7 @@ static void KeyboardWillShow(CFNotificationCenterRef center, void *observer, CFS
 	}
 	UIDevice *device = [UIDevice currentDevice];
 	weOwnProximitySensor = !device.proximityMonitoringEnabled;
-	if (weOwnProximitySensor)
+	if (weOwnProximitySensor && VKProximityEnabled)
 		device.proximityMonitoringEnabled = YES;
 	hasKeyboard = YES;
 }
@@ -753,7 +754,7 @@ static void ProximityStateDidChange(CFNotificationCenterRef center, void *observ
 static void WillEnterForeground(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
 {
 	ProductLog(@"Will enter foreground");
-	if (hasKeyboard && weOwnProximitySensor) {
+	if (hasKeyboard && weOwnProximitySensor && VKProximityEnabled) {
 		[UIDevice currentDevice].proximityMonitoringEnabled = YES;
 	}
 	StopRecognitionAndSend(NO);
@@ -776,7 +777,12 @@ static void LoadSettings()
 	VKFinishWithPeriod = [[dict objectForKey:@"VKFinishWithPeriod"] boolValue];
 	VKFinishWithSpace = [[dict objectForKey:@"VKFinishWithSpace"] boolValue];
 	VKFinishWithReturn = [[dict objectForKey:@"VKFinishWithReturn"] boolValue];
+	id temp = [dict objectForKey:@"VKProximityEnabled"];
+	VKProximityEnabled = temp ? [temp boolValue] : YES;
 	[dict release];
+	if (weOwnProximitySensor && !VKProximityEnabled) {
+        [UIDevice currentDevice].proximityMonitoringEnabled = NO;
+	}
 }
 
 //
