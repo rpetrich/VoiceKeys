@@ -6,6 +6,7 @@
 #import <JSON/JSON.h>
 #import <AppSupport/AppSupport.h>
 #import <ActionMenu/ActionMenu.h>
+#import <libactivator/libactivator.h>
 
 #include <speex/speex.h>
 #include <speex/speex_echo.h>
@@ -417,11 +418,11 @@ __attribute__((visibility("hidden")))
 
 static BOOL weOwnProximitySensor;
 static BOOL hasKeyboard;
+static BOOL someAppHasKeyboardAndIsActive;
 static CFMutableDataRef speechData;
 static CFAbsoluteTime startTime;
 static CPDistributedMessagingCenter *messagingCenter;
 static NSString *lastResult;
-static BOOL waitingForRecognition;
 
 @implementation ProductTokenAppend(SpeechClient)
 
@@ -518,7 +519,6 @@ static void audioInputFrameCallback(char *buffer, size_t length)
 
 static inline BOOL StartRecognition()
 {
-	waitingForRecognition = YES;
 	if (messagingCenter) {
 		NSDictionary *results = [messagingCenter sendMessageAndReceiveReplyName:@"start" userInfo:nil];
 		return [[results objectForKey:@"actionSucceeded"] boolValue];
@@ -546,9 +546,8 @@ static inline NSString *GetLastResult()
 
 static void RecognitionDidComplete(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
 {
-	if (!waitingForRecognition)
+	if (!hasKeyboard)
 		return;
-	waitingForRecognition = NO;
 	NSString *utterance = GetLastResult();
 	if ([utterance length] == 0)
 		ShowNoRecognitionAlert();
@@ -627,6 +626,24 @@ static inline BOOL IsRecognizing()
 	}
 }
 
+static inline void Enable()
+{
+	if (messagingCenter) {
+		[messagingCenter sendMessageAndReceiveReplyName:@"enable" userInfo:nil];
+	} else {
+		someAppHasKeyboardAndIsActive = YES;
+	}
+}
+
+static inline void Disable()
+{
+	if (messagingCenter) {
+		[messagingCenter sendMessageAndReceiveReplyName:@"disable" userInfo:nil];
+	} else {
+		someAppHasKeyboardAndIsActive = NO;
+	}
+}
+
 // Action Menu
 
 __attribute__((visibility("hidden")))
@@ -645,6 +662,12 @@ __attribute__((visibility("hidden")))
 		actionSucceeded = StartRecognition();
 	} else if ([name isEqualToString:@"stop"]) {
 		actionSucceeded = StopRecognitionAndSend([[userInfo objectForKey:@"send"] boolValue]);
+	} else if ([name isEqualToString:@"enable"]) {
+		Enable();
+		actionSucceeded = YES;
+	} else if ([name isEqualToString:@"disable"]) {
+		Disable();
+		actionSucceeded = YES;
 	} else {
 		actionSucceeded = NO;
 	}
@@ -712,6 +735,69 @@ __attribute__((visibility("hidden")))
 
 @end
 
+// Activator
+
+__attribute__((visibility("hidden")))
+@interface ProductTokenAppend(ActivatorListener) : NSObject <UIAlertViewDelegate, LAListener> {
+@private
+	UIAlertView *av;
+}
+@end
+
+@implementation ProductTokenAppend(ActivatorListener)
+
+- (id)init
+{
+	if ((self = [super init])) {
+		[LASharedActivator registerListener:self forName:@"com.rpetrich.voicekeys"];
+	}
+	return self;
+}
+
+- (void)dealloc
+{
+	[LASharedActivator unregisterListenerWithName:@"com.rpetrich.voicekeys"];
+	[super dealloc];
+}
+
+- (void)activator:(LAActivator *)activator receiveEvent:(LAEvent *)event
+{
+	if (av) {
+		StopRecognitionAndSend(NO);
+		[av dismissWithClickedButtonIndex:-1 animated:YES];
+		av.delegate = nil;
+		[av release];
+		av = nil;
+		event.handled = YES;
+	} else if (someAppHasKeyboardAndIsActive) {
+		if (StartRecognition()) {
+			av = [[UIAlertView alloc] initWithTitle:@"VoiceKeys" message:@"Recording speech…" delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Recognize", nil];
+			av.delegate = self;
+			[av show];
+		}
+		event.handled = YES;
+	}
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
+{
+	if (buttonIndex != alertView.cancelButtonIndex) {
+		if (!StopRecognitionAndSend(YES)) {
+			alertView = [[UIAlertView alloc] initWithTitle:@"VoiceKeys" message:@"Unable to convert speech to text!" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+			[alertView show];
+			[alertView release];
+		}
+	} else {
+		StopRecognitionAndSend(NO);
+	}
+	av.delegate = nil;
+	[av autorelease];
+	av = nil;
+}
+
+@end
+
+
 //
 // Notification Callbacks
 //
@@ -731,6 +817,7 @@ static void KeyboardWillShow(CFNotificationCenterRef center, void *observer, CFS
 	weOwnProximitySensor = !device.proximityMonitoringEnabled;
 	if (weOwnProximitySensor && VKProximityEnabled)
 		device.proximityMonitoringEnabled = YES;
+	Enable();
 	hasKeyboard = YES;
 }
 
@@ -738,6 +825,7 @@ static void KeyboardWillHide(CFNotificationCenterRef center, void *observer, CFS
 {
 	ProductLog(@"Exiting text field");
 	hasKeyboard = NO;
+	Disable();
 	if (weOwnProximitySensor)
 		[UIDevice currentDevice].proximityMonitoringEnabled = NO;
 }
@@ -754,8 +842,10 @@ static void ProximityStateDidChange(CFNotificationCenterRef center, void *observ
 static void WillEnterForeground(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
 {
 	ProductLog(@"Will enter foreground");
-	if (hasKeyboard && weOwnProximitySensor && VKProximityEnabled) {
-		[UIDevice currentDevice].proximityMonitoringEnabled = YES;
+	if (hasKeyboard) {
+		Enable();
+		if (weOwnProximitySensor && VKProximityEnabled)
+			[UIDevice currentDevice].proximityMonitoringEnabled = YES;
 	}
 	StopRecognitionAndSend(NO);
 }
@@ -763,8 +853,10 @@ static void WillEnterForeground(CFNotificationCenterRef center, void *observer, 
 static void DidEnterBackground(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo)
 {
 	ProductLog(@"Did enter background");
-	if (hasKeyboard && weOwnProximitySensor) {
-		[UIDevice currentDevice].proximityMonitoringEnabled = NO;
+	if (hasKeyboard) {
+		Disable();
+		if (weOwnProximitySensor)
+			[UIDevice currentDevice].proximityMonitoringEnabled = NO;
 	}
 	StopRecognitionAndSend(NO);
 }
@@ -802,12 +894,15 @@ CHConstructor {
 	CFNotificationCenterAddObserver(darwin, NULL, (void *)RecognitionDidComplete, CFSTR("com.rpetrich.voicekeys.finished"), NULL, CFNotificationSuspensionBehaviorCoalesce);
 	LoadSettings();
 	messagingCenter = [[CPDistributedMessagingCenter centerNamed:@"com.rpetrich.voicekeys.springboard"] retain];
-	if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
+	if (LASharedActivator.runningInsideSpringBoard) {
+		[[ProductTokenAppend(ActivatorListener) alloc] init];
 		[messagingCenter runServerOnCurrentThread];
 		Class targetClass = [ProductTokenAppend(ActionMenuHandler) class];
 		[messagingCenter registerForMessageName:@"start" target:targetClass selector:@selector(handleMessage:withUserInfo:)];
 		[messagingCenter registerForMessageName:@"stop" target:targetClass selector:@selector(handleMessage:withUserInfo:)];
 		[messagingCenter registerForMessageName:@"status" target:targetClass selector:@selector(handleMessage:withUserInfo:)];
+		[messagingCenter registerForMessageName:@"enable" target:targetClass selector:@selector(handleMessage:withUserInfo:)];
+		[messagingCenter registerForMessageName:@"disable" target:targetClass selector:@selector(handleMessage:withUserInfo:)];
 		messagingCenter = nil;
 	}
 }

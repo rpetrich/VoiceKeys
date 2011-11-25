@@ -1,0 +1,5 @@
+{
+	title = "VoiceKeys";
+	description = "Start/stop voice recognition";
+	group = "Audio";
+}
